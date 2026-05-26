@@ -1,0 +1,5 @@
+- [x] ANSI SGR 解析在剥离控制字符之前执行，且 SGR 序列不出现在最终渲染文本中
+- [x] 支持 SGR：reset/bold/underline/ANSI16/ANSI256（对不支持参数可忽略但不崩溃）
+- [x] 布局（换行/分页）仅按可见字符计数，样式在换行处正确延续
+- [x] 栅格渲染正确应用 foreground/background/bold/underline，且输出确定性
+- [x] E2E 覆盖红/绿 diff 场景（像素级或等价强断言），满足“新增绿、删除红可辨别”的验收标准

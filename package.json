@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "npx tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/__tests__/text.test.js dist/__tests__/layout.test.js dist/__tests__/cli.e2e.test.js",
+    "test": "npm run build && node --test dist/__tests__/text.test.js dist/__tests__/layout.test.js dist/__tests__/theme.test.js dist/__tests__/cli.e2e.test.js",
     "typecheck": "npx tsc -p tsconfig.json --noEmit",
     "start": "node dist/cli.js"
   },

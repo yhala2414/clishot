@@ -10,7 +10,7 @@ import { renderTextToImages } from "./render/render";
 type CliOptions = {
   in?: string;
   encoding: string;
-  out: string;
+  out?: string;
   format: "png" | "jpg";
   theme: "terminal" | "paper";
   cols: string;
@@ -54,17 +54,15 @@ function parseJpgQuality(value: string): number {
   return parsed;
 }
 
-async function main(): Promise<void> {
-  const program = new Command();
-
-  program.name("clishot").description("Render-only: 纯文本 → 图片（PNG/JPG）").version("0.0.0");
-
-  program
-    .command("render")
-    .description("从 stdin 或文件读取文本并渲染为图片")
-    .option("--in <file>", "从文件读取文本")
-    .option("--encoding <name>", "输入编码（默认 auto，可显式指定 utf-8、utf-16le、gb18030 等）", "auto")
-    .requiredOption("--out <path>", "输出文件路径或前缀（支持多页 name-001.ext）")
+function configureRenderCommand(cmd: Command, requireOut: boolean): void {
+  cmd.option("--in <file>", "从文件读取文本（不传则从 stdin 读取）");
+  cmd.option("--encoding <name>", "输入编码（默认 auto，可显式指定 utf-8、utf-16le、gb18030 等）", "auto");
+  if (requireOut) {
+    cmd.requiredOption("--out <path>", "输出文件路径或前缀（支持多页 name-001.ext）");
+  } else {
+    cmd.option("--out <path>", "输出文件路径或前缀（支持多页 name-001.ext）");
+  }
+  cmd
     .option("--format <png|jpg>", "输出格式", "png")
     .option("--theme <terminal|paper>", "主题", "terminal")
     .option("--cols <number>", "最大列宽（字符数）", "100")
@@ -74,7 +72,10 @@ async function main(): Promise<void> {
     .option("--margin <number>", "边距（px）", "24")
     .option("--tab-stop <number>", "tab 展开到的空格列宽", "4")
     .option("--jpg-quality <number>", "JPG 质量（1~100）", "90")
-    .action(async (options: CliOptions) => {
+    .action(async (options: CliOptions, command: Command) => {
+      if (!options.out) {
+        command.error(`required option '--out <path>' not specified`);
+      }
       const outPath = options.out;
 
       const cols = parseIntOption(options.cols, "--cols");
@@ -131,6 +132,25 @@ async function main(): Promise<void> {
         process.stdout.write(`${p}\n`);
       }
     });
+}
+
+async function main(): Promise<void> {
+  const program = new Command();
+
+  program
+    .name("clishot")
+    .usage("[options]")
+    .description("Render-only: 纯文本 → 图片（PNG/JPG）")
+    .version("0.0.0")
+    .enablePositionalOptions()
+    .showHelpAfterError()
+    .showSuggestionAfterError();
+
+  configureRenderCommand(program, false);
+
+  const renderCmd = program.command("render").description("从 stdin 或文件读取文本并渲染为图片");
+  renderCmd.showHelpAfterError().showSuggestionAfterError();
+  configureRenderCommand(renderCmd, true);
 
   await program.parseAsync(process.argv);
 }

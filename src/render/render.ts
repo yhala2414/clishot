@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { layoutTextToPages } from "./layout";
+import { layoutStyledTextToPages } from "./layout";
 import { encodeCanvasToBuffer, renderPageToCanvas } from "./raster";
-import { cleanTextForRender } from "./text";
+import { parseStyledTextForRender } from "./text";
 import { resolveOutputPaths, validateOutputDirectory } from "./output";
 import { getTheme } from "./theme";
 import { ensureFontReady } from "./typography";
@@ -27,8 +27,8 @@ export async function renderTextToImages(options: RenderOptions): Promise<string
   const theme = getTheme(options.theme);
   const typography = await ensureFontReady();
 
-  const cleaned = cleanTextForRender(options.inputText, { tabStop: options.tabStop });
-  const pages = layoutTextToPages(cleaned, { cols: options.cols, rows: options.rows });
+  const styledLines = parseStyledTextForRender(options.inputText, { tabStop: options.tabStop });
+  const pages = layoutStyledTextToPages(styledLines, { cols: options.cols, rows: options.rows });
 
   const outputs = resolveOutputPaths(options.outPath, {
     format: options.format,

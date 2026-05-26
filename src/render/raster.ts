@@ -1,10 +1,11 @@
 import { createCanvas } from "@napi-rs/canvas";
 import type { Canvas } from "@napi-rs/canvas";
-import type { Theme } from "./theme";
+import { ansi256ToRgbHex, type Theme } from "./theme";
+import type { ColorSpec, StyledLine, TextStyle } from "./text";
 import type { Typography } from "./typography";
 
 export function renderPageToCanvas(options: {
-  lines: string[];
+  lines: StyledLine[];
   cols: number;
   rows: number;
   theme: Theme;
@@ -15,7 +16,8 @@ export function renderPageToCanvas(options: {
 }): Canvas {
   const metricsCanvas = createCanvas(1, 1);
   const metricsCtx = metricsCanvas.getContext("2d");
-  metricsCtx.font = `${options.fontSize}px ${options.typography.fontFamilyCss}`;
+  const baseFont = `${options.fontSize}px ${options.typography.fontFamilyCss}`;
+  metricsCtx.font = baseFont;
   metricsCtx.textBaseline = "top";
 
   const charWidth = metricsCtx.measureText("M").width;
@@ -30,16 +32,64 @@ export function renderPageToCanvas(options: {
   ctx.fillStyle = options.theme.background;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.font = metricsCtx.font;
+  ctx.font = baseFont;
   ctx.textBaseline = "top";
-  ctx.fillStyle = options.theme.foreground;
 
   for (let i = 0; i < options.lines.length; i++) {
-    const line = options.lines[i] ?? "";
-    ctx.fillText(line, options.margin, options.margin + i * lineHeightPx);
+    const line = options.lines[i] ?? [];
+    const y = options.margin + i * lineHeightPx;
+    let x = options.margin;
+
+    for (const seg of line) {
+      const len = seg.text.length;
+      if (len === 0) {
+        continue;
+      }
+
+      const bg = resolveBgColor(seg.style, options.theme);
+      if (bg) {
+        ctx.fillStyle = bg;
+        ctx.fillRect(x, y, charWidth * len, lineHeightPx);
+      }
+
+      ctx.font = seg.style.bold ? `bold ${baseFont}` : baseFont;
+      ctx.fillStyle = resolveFgColor(seg.style, options.theme);
+      ctx.fillText(seg.text, x, y);
+
+      if (seg.style.underline) {
+        const underlineY = y + options.fontSize;
+        ctx.fillRect(x, underlineY, charWidth * len, 1);
+      }
+
+      x += charWidth * len;
+    }
   }
 
   return canvas;
+}
+
+function resolveFgColor(style: TextStyle, theme: Theme): string {
+  return resolveColor(style.fg, theme, theme.foreground);
+}
+
+function resolveBgColor(style: TextStyle, theme: Theme): string | null {
+  if (!style.bg) {
+    return null;
+  }
+  return resolveColor(style.bg, theme, theme.background);
+}
+
+function resolveColor(spec: ColorSpec, theme: Theme, fallback: string): string {
+  if (spec.type === "default") {
+    return fallback;
+  }
+  if (spec.type === "ansi16") {
+    return theme.ansi16Palette[spec.index] ?? fallback;
+  }
+  if (spec.type === "ansi256") {
+    return ansi256ToRgbHex(spec.index, theme.ansi16Palette) ?? fallback;
+  }
+  return fallback;
 }
 
 export async function encodeCanvasToBuffer(

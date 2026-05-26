@@ -5,17 +5,24 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { inflateSync } from "node:zlib";
 import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
-import { layoutTextToPages } from "../render/layout";
+import { layoutStyledTextToPages } from "../render/layout";
 import { renderPageToCanvas, encodeCanvasToBuffer } from "../render/raster";
 import { getTheme, type ThemeName } from "../render/theme";
-import { cleanTextForRender } from "../render/text";
+import { parseStyledTextForRender } from "../render/text";
 import { ensureFontReady } from "../render/typography";
 
 type CliRunResult = {
   code: number | null;
   stdout: string;
   stderr: string;
+};
+
+type DecodedPng = {
+  width: number;
+  height: number;
+  rgba: Uint8Array;
 };
 
 function parsePngSize(buf: Buffer): { width: number; height: number } {
@@ -26,6 +33,150 @@ function parsePngSize(buf: Buffer): { width: number; height: number } {
   const width = buf.readUInt32BE(16);
   const height = buf.readUInt32BE(20);
   return { width, height };
+}
+
+function decodePngRgba(buf: Buffer): DecodedPng {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(buf.subarray(0, 8).equals(signature), true);
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  const idat: Buffer[] = [];
+
+  while (offset + 8 <= buf.length) {
+    const length = buf.readUInt32BE(offset);
+    const type = buf.subarray(offset + 4, offset + 8).toString("ascii");
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    assert.equal(dataEnd + 4 <= buf.length, true);
+
+    if (type === "IHDR") {
+      width = buf.readUInt32BE(dataStart);
+      height = buf.readUInt32BE(dataStart + 4);
+      bitDepth = buf[dataStart + 8]!;
+      colorType = buf[dataStart + 9]!;
+      interlace = buf[dataStart + 12]!;
+    } else if (type === "IDAT") {
+      idat.push(buf.subarray(dataStart, dataEnd));
+    } else if (type === "IEND") {
+      break;
+    }
+
+    offset = dataEnd + 4;
+  }
+
+  assert.equal(bitDepth, 8);
+  assert.equal(colorType, 6);
+  assert.equal(interlace, 0);
+  assert.equal(idat.length > 0, true);
+
+  const inflated = inflateSync(Buffer.concat(idat));
+  const stride = width * 4;
+  const rgba = new Uint8Array(width * height * 4);
+  const prev = new Uint8Array(stride);
+  const row = new Uint8Array(stride);
+
+  let p = 0;
+  let out = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = inflated[p]!;
+    p += 1;
+    row.set(inflated.subarray(p, p + stride));
+    p += stride;
+
+    unfilterRow(filter, row, prev, 4);
+    rgba.set(row, out);
+    out += stride;
+    prev.set(row);
+  }
+
+  return { width, height, rgba };
+}
+
+function unfilterRow(filter: number, row: Uint8Array, prev: Uint8Array, bpp: number): void {
+  if (filter === 0) {
+    return;
+  }
+
+  if (filter === 1) {
+    for (let i = 0; i < row.length; i += 1) {
+      const left = i >= bpp ? row[i - bpp]! : 0;
+      row[i] = (row[i]! + left) & 0xff;
+    }
+    return;
+  }
+
+  if (filter === 2) {
+    for (let i = 0; i < row.length; i += 1) {
+      row[i] = (row[i]! + prev[i]!) & 0xff;
+    }
+    return;
+  }
+
+  if (filter === 3) {
+    for (let i = 0; i < row.length; i += 1) {
+      const left = i >= bpp ? row[i - bpp]! : 0;
+      const up = prev[i]!;
+      row[i] = (row[i]! + Math.floor((left + up) / 2)) & 0xff;
+    }
+    return;
+  }
+
+  if (filter === 4) {
+    for (let i = 0; i < row.length; i += 1) {
+      const a = i >= bpp ? row[i - bpp]! : 0;
+      const b = prev[i]!;
+      const c = i >= bpp ? prev[i - bpp]! : 0;
+      row[i] = (row[i]! + paethPredictor(a, b, c)) & 0xff;
+    }
+    return;
+  }
+
+  throw new Error(`Unsupported PNG filter: ${filter}`);
+}
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) {
+    return a;
+  }
+  if (pb <= pc) {
+    return b;
+  }
+  return c;
+}
+
+function getPixel(decoded: DecodedPng, x: number, y: number): { r: number; g: number; b: number; a: number } {
+  assert.equal(x >= 0 && x < decoded.width, true);
+  assert.equal(y >= 0 && y < decoded.height, true);
+  const idx = (y * decoded.width + x) * 4;
+  return {
+    r: decoded.rgba[idx]!,
+    g: decoded.rgba[idx + 1]!,
+    b: decoded.rgba[idx + 2]!,
+    a: decoded.rgba[idx + 3]!
+  };
+}
+
+function assertRedDominant(p: { r: number; g: number; b: number; a: number }): void {
+  assert.equal(p.a, 255);
+  assert.equal(p.r > 180, true);
+  assert.equal(p.r > p.g + 120, true);
+  assert.equal(p.r > p.b + 120, true);
+}
+
+function assertGreenDominant(p: { r: number; g: number; b: number; a: number }): void {
+  assert.equal(p.a, 255);
+  assert.equal(p.g > 180, true);
+  assert.equal(p.g > p.r + 120, true);
+  assert.equal(p.g > p.b + 120, true);
 }
 
 function parseJpegSize(buf: Buffer): { width: number; height: number } {
@@ -122,8 +273,9 @@ async function renderTextHash(options: {
   fontFamilyCss?: string;
 }): Promise<string> {
   const typography = await ensureFontReady();
+  const style = { bold: false, underline: false, fg: { type: "default" as const }, bg: null };
   const canvas = renderPageToCanvas({
-    lines: [options.text],
+    lines: [[{ text: options.text, style }]],
     cols: Math.max(4, options.text.length * 2),
     rows: 1,
     theme: getTheme(options.theme),
@@ -154,8 +306,8 @@ async function renderFirstPagePngHash(options: {
   const margin = options.margin ?? 24;
   const tabStop = options.tabStop ?? 4;
   const typography = await ensureFontReady();
-  const cleaned = cleanTextForRender(options.inputText, { tabStop });
-  const pages = layoutTextToPages(cleaned, { cols: options.cols, rows: options.rows });
+  const styledLines = parseStyledTextForRender(options.inputText, { tabStop });
+  const pages = layoutStyledTextToPages(styledLines, { cols: options.cols, rows: options.rows });
   assert.equal(pages.length, 1, "测试样本应控制为单页，避免哈希对比掺入分页差异");
 
   const canvas = renderPageToCanvas({
@@ -262,6 +414,65 @@ test("CLI E2E: stdin -> 输出 JPG 文件存在且尺寸正确", async () => {
   const size = parseJpegSize(buf);
   const expected = await expectedCanvasSize({ cols, rows, fontSize, lineHeight, margin });
   assert.deepEqual(size, expected);
+});
+
+test("CLI E2E: ANSI 背景色区域像素按通道占优阈值断言（红/绿）", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const outFile = path.join(dir, "ansi-bg.png");
+
+  const cols = 4;
+  const rows = 2;
+  const fontSize = 32;
+  const lineHeight = 1.2;
+  const margin = 12;
+
+  const inputText = "\u001b[101m  \u001b[0m\n\u001b[102m  \u001b[0m";
+
+  const result = await runCli(
+    [
+      "render",
+      "--out",
+      outFile,
+      "--format",
+      "png",
+      "--theme",
+      "terminal",
+      "--cols",
+      String(cols),
+      "--rows",
+      String(rows),
+      "--font-size",
+      String(fontSize),
+      "--line-height",
+      String(lineHeight),
+      "--margin",
+      String(margin)
+    ],
+    inputText
+  );
+
+  assert.equal(result.code, 0, result.stderr);
+
+  const outputs = parseOutputPaths(result.stdout);
+  assert.equal(outputs.length, 1);
+  assert.equal(path.normalize(outputs[0]!), path.normalize(outFile));
+
+  const buf = await readFile(outFile);
+  const decoded = decodePngRgba(buf);
+
+  const typography = await ensureFontReady();
+  const metricsCanvas = createCanvas(1, 1);
+  const metricsCtx = metricsCanvas.getContext("2d");
+  metricsCtx.font = `${fontSize}px ${typography.fontFamilyCss}`;
+  const charWidth = metricsCtx.measureText("M").width;
+  const lineHeightPx = Math.round(fontSize * lineHeight);
+
+  const x = Math.round(margin + charWidth * 0.5);
+  const yRed = Math.round(margin + lineHeightPx * 0.5);
+  const yGreen = Math.round(margin + lineHeightPx * 1.5);
+
+  assertRedDominant(getPixel(decoded, x, yRed));
+  assertGreenDominant(getPixel(decoded, x, yGreen));
 });
 
 test("CLI E2E: --in 文件 -> 多页命名正确且页数符合预期", async () => {
