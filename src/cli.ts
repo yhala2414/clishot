@@ -57,23 +57,42 @@ function parseJpgQuality(value: string): number {
 async function main(): Promise<void> {
   const program = new Command();
 
-  program.name("clishot").description("Render-only: 纯文本 → 图片（PNG/JPG）").version("0.0.0");
+  program
+    .name("clishot")
+    .description("将终端文本渲染为图片（PNG/JPG），支持管道输入和文件输入")
+    .version("0.0.0")
+    .addHelpText(
+      "beforeAll",
+      `将终端文本渲染为精美的图片，适合分享代码片段、日志、文档等。
+
+用法概览:
+  <命令> | clishot render --out <图片路径>
+  clishot render --in <文本文件> --out <图片路径> [选项]
+
+示例:
+  echo "Hello World" | clishot render --out hello.png
+  clishot render --in readme.txt --out output.png --format jpg --theme paper
+  git diff | clishot render --out diff.png --cols 120
+  cargo check 2>&1 | clishot render --out build-log.png --theme terminal
+
+`,
+    );
 
   program
     .command("render")
-    .description("从 stdin 或文件读取文本并渲染为图片")
-    .option("--in <file>", "从文件读取文本")
-    .option("--encoding <name>", "输入编码（默认 auto，可显式指定 utf-8、utf-16le、gb18030 等）", "auto")
-    .requiredOption("--out <path>", "输出文件路径或前缀（支持多页 name-001.ext）")
+    .description("将文本渲染为图片（支持管道或 --in 文件输入）")
+    .option("--in <file>", "从文件读取文本（不指定则从管道 stdin 读取）")
+    .option("--encoding <name>", `输入编码 auto | utf-8 | utf-16le | gb18030 等`, "auto")
+    .requiredOption("--out <path>", "输出路径（多页时自动添加 -001 后缀）")
     .option("--format <png|jpg>", "输出格式", "png")
-    .option("--theme <terminal|paper>", "主题", "terminal")
-    .option("--cols <number>", "最大列宽（字符数）", "100")
-    .option("--rows <number>", "每页最大行数", "40")
-    .option("--font-size <number>", "字体大小（px）", "16")
-    .option("--line-height <number>", "行高倍数（例如 1.35）", "1.35")
-    .option("--margin <number>", "边距（px）", "24")
-    .option("--tab-stop <number>", "tab 展开到的空格列宽", "4")
-    .option("--jpg-quality <number>", "JPG 质量（1~100）", "90")
+    .option("--theme <terminal|paper>", "主题: terminal（深色终端风格）| paper（浅色纸张风格）", "terminal")
+    .option("--cols <number>", "最大列宽（字符数，默认 100）", "100")
+    .option("--rows <number>", "每页行数（超长文本自动分页，默认 40）", "40")
+    .option("--font-size <number>", "字号（px，默认 16）", "16")
+    .option("--line-height <number>", "行高倍数（默认 1.35）", "1.35")
+    .option("--margin <number>", "图片边距（px，默认 24）", "24")
+    .option("--tab-stop <number>", "Tab 展开宽度（空格数，默认 4）", "4")
+    .option("--jpg-quality <number>", "JPG 图片质量 1-100（默认 90）", "90")
     .action(async (options: CliOptions) => {
       const outPath = options.out;
 
